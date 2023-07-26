@@ -1,0 +1,13 @@
+---
+error_phantom_token: YOUR_ERROR_PHANTOM_TOKEN
+plugins:
+- name: Docker
+  commands:
+  - docker
+  - docker-compose
+- name: Homebrew
+  commands:
+  - brew
+- name: RVM
+  commands:
+  - rvm
