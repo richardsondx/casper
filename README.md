@@ -11,7 +11,7 @@ It is designed to be user-friendly, lightweight with no extensive training neede
 
 ## How it works
 
-Capser overwrites specified commands on your shell session to wrap a bug tracker arround them.
+Casper overwrites specified commands on your shell session to wrap a bug tracker arround them.
 
 It'll look for command defined in your `casperconfig.yaml` file to identify which command it should track, then it'll update a `~/.casper_profile` file you can use with your terminal session that contains all the overwrite for the commands you want to track.
 
@@ -25,6 +25,8 @@ You can pick which alert system you want to use.
 
 
 ## Getting Started
+
+`[WIP] Right now it just logs the error to a log file`
 
 To start using Casper, follow these steps:
 
