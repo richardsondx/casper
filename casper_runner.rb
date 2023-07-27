@@ -1,11 +1,8 @@
-# casper_runner.rb
-
 require 'yaml'
 
 # Configuration
 PROFILE = '~/.test_profile' # Change this to the desired shell profile
-CASPER_FUNCTION_SUFFIX = '_casper'
-ALERT_TYPE = :log # Change this to :log, :http_request, or :slack based on the desired alert method
+LOG_FILE= '~/casper_log.txt'
 LOG_BACKTRACE = true # Change this to false to disable logging of backtrace
 
 def set_error_tracker(function_name = nil)
@@ -25,7 +22,7 @@ def set_error_tracker(function_name = nil)
       # If no function name is provided, install every plugin command
       config['plugins'].each do |plugin|
         plugin['commands'].each do |command|
-          new_function_name = "#{command}#{CASPER_FUNCTION_SUFFIX}"
+          new_function_name = "#{command}"
           plugins_to_install << [new_function_name, plugin['name'], command]
         end
       end
@@ -34,7 +31,7 @@ def set_error_tracker(function_name = nil)
       config['plugins'].each do |plugin|
         plugin['commands'].each do |cmd|
           if cmd == function_name
-            new_function_name = "#{function_name}#{CASPER_FUNCTION_SUFFIX}"
+            new_function_name = "#{function_name}"
             plugins_to_install << [new_function_name, plugin['name'], cmd]
           end
         end
@@ -54,9 +51,93 @@ def set_error_tracker(function_name = nil)
   end
 end
 
-def unset_error_tracker(function_name)
+def unset_error_tracker(function_name = nil)
+  profile_path = File.expand_path(PROFILE)
+  profile_content = File.read(profile_path)
+
+  if function_name.nil?
+    clear_all_functions
+  else
+    if profile_content.include?(function_name)
+      puts "Removing error_tracker from #{function_name}"
+      remove_casper_command(function_name)
+    else
+      puts "Error: Function '#{function_name}' not found in the test_profile file."
+      exit 1
+    end
+  end
+end
+
+def set_casper_in_profile
+  profile_path = File.expand_path(PROFILE)
+  profile_content = File.read(profile_path)
+
+  # Check if casper_track_error is already defined in the profile content
+  unless profile_content.include?('casper_track_error() {')
+    # Inject the casper_track_error function at the end of the profile content
+    casper_track_error_code = <<-SHELL
+casper_track_error() {
+    echo "casper_track_error called"
+
+    local exit_code="$1"
+    local os_version="$2"
+    local command_run="$3"
+    local output="$4"
+    local error_message="$5"
+    local log_file="#{LOG_FILE}"
+    
+    log_file=$(eval echo "$log_file")
+
+    # Check if the log file exists; create it if it doesn't
+    if [ ! -f "$log_file" ]; then
+        touch "$log_file"
+    fi
+
+    # Add a timestamp similar to Rails log timestamp
+    local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+
+    # Save the error message and backtrace (output) to the log file
+    {
+        echo "[$timestamp] OS Version: $os_version"
+        echo "[$timestamp] Command: $command_run"
+        echo "[$timestamp] Exit Code: $exit_code"
+        echo "[$timestamp] $error_message"
+        #{LOG_BACKTRACE ? 'echo "[$timestamp] Backtrace:"' : ''}
+        #{LOG_BACKTRACE ? 'echo "[$timestamp] $output"' : ''}
+        echo ""
+    } >> "$log_file"
+}
+SHELL
+
+    profile_content += "\n\n" + casper_track_error_code
+    File.write(profile_path, profile_content)
+
+    puts "casper_track_error function injected into the profile: #{PROFILE}"
+  else
+    puts "casper_track_error function is already defined in the profile: #{PROFILE}"
+  end
+end
+
+
+def clear_all_functions
+  profile_path = File.expand_path(PROFILE)
+  profile_content = File.read(profile_path)
+  
+  casper_block_start = profile_content.index(/#+\s*CASPER START/)
+  casper_block_end = profile_content.index(/#+\s*CASPER END/)
+
+  if casper_block_start && casper_block_end && casper_block_start < casper_block_end
+    profile_content.slice!(casper_block_start..casper_block_end)
+
+    File.write(profile_path, profile_content)
+    puts "Casper commands removed from #{PROFILE}"
+  else
+    puts "Error: CASPER START and CASPER END comments not found in #{PROFILE}. Cannot remove Casper commands."
+  end
+end
+
+def clear_yaml
   yaml_file = 'casperconfig.yaml'
-  new_function_name = "#{function_name}#{CASPER_FUNCTION_SUFFIX}"
 
   File.open(yaml_file, 'r+') do |file|
     config = YAML.safe_load(file.read)
@@ -67,41 +148,48 @@ def unset_error_tracker(function_name)
     end
 
     config['plugins'].each do |plugin|
-      plugin_name = plugin['name']
-      plugin['commands'].each do |command|
-        if command == new_function_name
-          puts "Removing error_tracker from #{function_name}"
-          File.write(yaml_file, YAML.dump(config).gsub(new_function_name, function_name))
-          remove_casper_command(plugin_name, new_function_name)  # Fixed here
-          return
-        end
-      end
+      plugin['commands'] = []
     end
 
-    puts "Error: Function '#{new_function_name}' not found in the casperconfig.yaml file."
-    exit 1
+    # Write the updated configuration back to the YAML file
+    File.write(yaml_file, YAML.dump(config))
   end
 end
 
 
 def add_casper_command(plugin_name, function_name, command)
+  set_casper_in_profile
+
   profile_path = File.expand_path(PROFILE)
   profile_content = File.read(profile_path)
 
-  new_function_name = "#{function_name}"
+  new_function_name = "casper_#{function_name}"
 
   casper_command = <<-SHELL
-#{new_function_name}() {
-  # Error tracking logic before the original command
-  track_error("#{plugin_name}", "#{command}", "$*")
+  #{function_name}() {
+    #{new_function_name}() {
+      echo "👻 Casper is watching and tracking errors for: #{function_name}..."
+  
+      # Run docker-compose and capture both stdout and stderr to separate variables
+      local output
+      local error_output
+      output=$(command docker-compose "$@" 2>&1 >/dev/null)
+      error_output=$?
 
-  # Call the original command with its arguments
-  command #{command} "$@"
+      # Check if an error occurred
+      if [ "$error_output" -ne 0 ]; then
+          local exit_code="$error_output"
+          local os_version=$(uname -a)
+          local command_run="#{function_name} $*"
+          local error_message="Error occurred during '#{function_name} $@' execution: $output"
 
-  # Error tracking logic after the original command
-  track_error_complete("#{command}", "$*")
-}
-SHELL
+          casper_track_error "$exit_code" "$os_version" "$command_run" "$output" "$error_message"
+      fi
+    }
+  
+    #{new_function_name} "$@"
+  }
+  SHELL
 
   casper_block_start = profile_content.index(/(#+\s*)CASPER START/)
   casper_block_end = profile_content.index(/(#+\s*)CASPER END/)
@@ -133,7 +221,8 @@ SHELL
   end
 end
 
-def remove_casper_command(plugin_name, function_name)
+# TODO: to fix, the regex doesn't expect nested brackets.
+def remove_casper_command(function_name)
   profile_path = File.expand_path(PROFILE)
   profile_content = File.read(profile_path)
 
@@ -146,7 +235,8 @@ def remove_casper_command(plugin_name, function_name)
     casper_block_content = profile_content[casper_block_start..casper_block_end]
 
     # Capture entire function body including brackets {}
-    function_regex = /(#{new_function_name}\(\) \{[^}]*\})/
+    function_regex = /(#{new_function_name}\(\)\s*\{(?:[^{}]*|(?:(casper_#{new_function_name}\(\)\s*\{[^{}]*\}))*)*\})/m
+
 
     if casper_block_content.match(function_regex)
       # Remove the function
@@ -156,75 +246,14 @@ def remove_casper_command(plugin_name, function_name)
       profile_content[casper_block_start..casper_block_end] = casper_block_content
 
       File.write(profile_path, profile_content)
-      puts "Casper command #{new_function_name} removed from #{PROFILE}"
+      puts "Casper command #{new_function_name} removed from test_profile"
     else
-      puts "Error: Casper command '#{new_function_name}' not found in #{PROFILE}. Cannot remove Casper commands."
+      puts "Error: Casper command '#{new_function_name}' not found in test_profile. Cannot remove Casper commands."
     end
   else
-    puts "Error: CASPER START and CASPER END comments not found in #{PROFILE}. Cannot remove Casper commands."
+    puts "Error: CASPER START and CASPER END comments not found in test_profile. Cannot remove Casper commands."
   end
 end
-
-def get_device_info
-  # Implement the logic to get device information
-  # You can use Ruby or any system command to gather device info
-  # For example, using Ruby's `Socket` module to get the hostname and OS
-  require 'socket'
-
-  hostname = Socket.gethostname
-  os_version = `sw_vers -productVersion`.strip # macOS version
-
-  "Device: #{hostname}, macOS #{os_version}"
-end
-
-def track_error_complete(command, error_message)
-  case ALERT_TYPE
-  when :log
-    log_error(command, error_message)
-  when :http_request
-    send_http_request(command, error_message)
-  when :slack
-    send_slack_message(command, error_message)
-  else
-    puts "Error: Invalid ALERT_TYPE specified in the casper_runner.rb script."
-  end
-end
-
-def log_error(command, error_message)
-  # Implement the logic to log the error in a log.txt file
-
-  # Command execution status code (0 means success, non-zero means error)
-  command_status = $?
-
-  if command_status.exitstatus != 0
-    puts "Command '#{command}' triggered an error at: #{Time.now}"
-    puts "Error Message: #{error_message}"
-
-    error_message_with_backtrace = "Command '#{command}' triggered an error at: #{Time.now}\nError Message: #{error_message}\nBacktrace:\n#{caller.join("\n")}"
-
-    if LOG_BACKTRACE
-      puts error_message_with_backtrace
-      File.open('log.txt', 'a') { |file| file.puts(error_message_with_backtrace) }
-    else
-      File.open('log.txt', 'a') { |file| file.puts("Command '#{command}' triggered an error at: #{Time.now}\nError Message: #{error_message}") }
-    end
-  end
-end
-
-def send_http_request(command, error_message)
-  # Implement the logic to make an HTTP request to an endpoint
-  # Example: Use Ruby's Net::HTTP to send a request with the error information
-end
-
-def send_slack_message(command, error_message)
-  # Implement the logic to send a Slack message to a channel
-  # Example: Use a Slack API or gem to post a message in a specified channel
-  # Note: You'll need to configure your Slack credentials and the desired channel
-  # For simplicity, this is just a placeholder message
-  puts "Slack message sent: Error occurred at #{Time.now}"
-end
-
-
 
 action = ARGV[0]
 function_name = ARGV[1]

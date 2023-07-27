@@ -10,4 +10,4 @@ plugins:
   - brew
 - name: RVM
   commands:
-  - rvm
+  - rvm_casper
