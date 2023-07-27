@@ -11,7 +11,7 @@ It is designed to be user-friendly, lightweight with no extensive training neede
 
 ## How it works
 
-Capser overwrite specified commands on your shell session to wrap a bug tracker arround them.
+Capser overwrites specified commands on your shell session to wrap a bug tracker arround them.
 
 It'll look for command defined in your `casperconfig.yaml` file to identify which command it should track, then it'll update a `~/.casper_profile` file you can use with your terminal session that contains all the overwrite for the commands you want to track.
 
