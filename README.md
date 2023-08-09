@@ -1,5 +1,6 @@
 # 👻 Casper: The error tracker for devops development scripts
 
+🚧 WIP
 
 Casper is an automated error tracking and monitoring tool for development scripts.
 
